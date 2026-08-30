@@ -131,6 +131,27 @@ console.timeEnd = console.timeEnd || function(){};
       each(colors,function(bucket,values){
 
         var color = bucket === 'black' ? '#000000' : '#ffffff';
+
+        if ( axis === 'both' ) {
+          // Emit both orientations' runs into the same path -- fully
+          // redundant as pure fill (each pixel gets covered twice), but
+          // useful if you later add stroke-width/opacity for a
+          // crosshatch-style texture instead of a flat fill.
+          var hRuns = buildRuns(values,'horizontal');
+          var vRuns = buildRuns(values,'vertical');
+          var bothPaths = [];
+
+          each(hRuns,function(i,run){
+            bothPaths.push(makePathData(run[0],run[1],run[2],'horizontal'));
+          });
+          each(vRuns,function(i,run){
+            bothPaths.push(makePathData(run[0],run[1],run[2],'vertical'));
+          });
+
+          output += makePath(color,bothPaths.join(''));
+          return; // next bucket
+        }
+
         var chosenAxis, runs;
 
         if ( autoModes.indexOf(axis) !== -1 ) {
@@ -266,7 +287,7 @@ console.timeEnd = console.timeEnd || function(){};
   function getAxis() {
     var el = document.querySelector('input[name="axis"]:checked') || document.getElementById('axis');
     var val = el ? el.value : 'horizontal';
-    var valid = ['vertical', 'auto', 'auto-median', 'auto-max'];
+    var valid = ['vertical', 'auto', 'auto-median', 'auto-max', 'both'];
     return ( valid.indexOf(val) !== -1 ) ? val : 'horizontal';
   }
 
