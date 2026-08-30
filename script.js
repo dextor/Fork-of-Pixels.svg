@@ -47,6 +47,55 @@ console.timeEnd = console.timeEnd || function(){};
     }
     function makePath(color,data) { return '<path stroke="'+color+'" d="'+data+'" />\n'; }
 
+    // Sorts a COPY of `values` into run-adjacent order for the given axis,
+    // then merges consecutive same-run pixels into [x,y,length] runs.
+    // Returns the runs array (does not build path strings -- that's cheap
+    // to do afterward once the winning axis is known).
+    function buildRuns(values,axis){
+
+      var sorted = values.slice(); // copy -- don't mutate the shared array
+
+      if ( axis === 'vertical' ) {
+        sorted.sort(function(a,b){ return a[0] - b[0] || a[1] - b[1]; }); // by x, then y
+      } else {
+        sorted.sort(function(a,b){ return a[1] - b[1] || a[0] - b[0]; }); // by y, then x
+      }
+
+      var runs = [];
+      var curPath;
+      var w = 1;
+
+      each(sorted,function(){
+
+        var continuesRun = false;
+
+        if ( curPath ) {
+          if ( axis === 'vertical' ) {
+            continuesRun = ( this[0] === curPath[0] && this[1] === (curPath[1] + w) );
+          } else {
+            continuesRun = ( this[1] === curPath[1] && this[0] === (curPath[0] + w) );
+          }
+        }
+
+        if ( continuesRun ) {
+          w++;
+        } else {
+          if ( curPath ) {
+            runs.push([curPath[0],curPath[1],w]);
+            w = 1;
+          }
+          curPath = this;
+        }
+
+      });
+
+      if ( curPath ) {
+        runs.push([curPath[0],curPath[1],w]); // Finish last run
+      }
+
+      return runs;
+    }
+
     function colorsToPaths(colors,axis){
 
       var output = "";
@@ -55,47 +104,32 @@ console.timeEnd = console.timeEnd || function(){};
       each(colors,function(bucket,values){
 
         var color = bucket === 'black' ? '#000000' : '#ffffff';
+        var chosenAxis, runs;
 
-        // Sort so same-row (horizontal) or same-column (vertical) pixels
-        // that belong to one run are adjacent to each other in the array.
-        if ( axis === 'vertical' ) {
-          values.sort(function(a,b){ return a[0] - b[0] || a[1] - b[1]; }); // by x, then y
+        if ( axis === 'auto' ) {
+          // Decide per-bucket: whichever orientation produces fewer
+          // distinct strokes wins for THIS shape (black or white),
+          // independent of what the other bucket chooses.
+          var horizRuns = buildRuns(values,'horizontal');
+          var vertRuns = buildRuns(values,'vertical');
+
+          if ( vertRuns.length < horizRuns.length ) {
+            chosenAxis = 'vertical';
+            runs = vertRuns;
+          } else {
+            chosenAxis = 'horizontal';
+            runs = horizRuns;
+          }
         } else {
-          values.sort(function(a,b){ return a[1] - b[1] || a[0] - b[0]; }); // by y, then x
+          chosenAxis = axis;
+          runs = buildRuns(values,axis);
         }
 
         var paths = [];
-        var curPath;
-        var w = 1;
-
-        // Loops through each bucket's pixels to optimize paths
-        each(values,function(){
-
-          var continuesRun = false;
-
-          if ( curPath ) {
-            if ( axis === 'vertical' ) {
-              continuesRun = ( this[0] === curPath[0] && this[1] === (curPath[1] + w) );
-            } else {
-              continuesRun = ( this[1] === curPath[1] && this[0] === (curPath[0] + w) );
-            }
-          }
-
-          if ( continuesRun ) {
-            w++;
-          } else {
-            if ( curPath ) {
-              paths.push(makePathData(curPath[0],curPath[1],w,axis));
-              w = 1;
-            }
-            curPath = this;
-          }
-
+        each(runs,function(i,run){
+          paths.push(makePathData(run[0],run[1],run[2],chosenAxis));
         });
 
-        if ( curPath ) {
-          paths.push(makePathData(curPath[0],curPath[1],w,axis)); // Finish last path
-        }
         output += makePath(color,paths.join(''));
       });
 
@@ -196,7 +230,7 @@ console.timeEnd = console.timeEnd || function(){};
   function getAxis() {
     var el = document.querySelector('input[name="axis"]:checked') || document.getElementById('axis');
     var val = el ? el.value : 'horizontal';
-    return val === 'vertical' ? 'vertical' : 'horizontal';
+    return ( val === 'vertical' || val === 'auto' ) ? val : 'horizontal';
   }
 
   var imageWorker = cw(convertImage);
