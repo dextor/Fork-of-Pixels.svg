@@ -18,8 +18,14 @@ console.timeEnd = console.timeEnd || function(){};
     }
   }
 
-  function convertImage(img){
+  // NOTE: this whole function is sent into a Web Worker via cw(), so it
+  // must remain self-contained (no references to outer-scope variables).
+  function convertImage(input){
     "use strict";
+
+    var img = input.img,
+        threshold = (typeof input.threshold === 'number') ? input.threshold : 128,
+        axis = input.axis === 'vertical' ? 'vertical' : 'horizontal';
 
     function each(obj,fn) {
       var length = obj.length,
@@ -33,45 +39,53 @@ console.timeEnd = console.timeEnd || function(){};
       }
     }
 
-    function componentToHex(c) {
-      var hex = parseInt(c).toString(16);
-      return hex.length == 1 ? "0" + hex : hex;
+    // Optimized for either horizontal or vertical runs
+    function makePathData(x,y,length,axis) {
+      return axis === 'vertical'
+        ? ('M'+x+' '+y+'v'+length)
+        : ('M'+x+' '+y+'h'+length);
     }
-
-    function getColor(r,g,b,a){
-      a = parseInt(a);
-      if ( a === undefined || a === 255 ) { return "#" + componentToHex(r) + componentToHex(g) + componentToHex(b); }
-      if ( a === 0 ) { return false; }
-      return 'rgba('+r+','+g+','+b+','+(a/255)+')';
-    }
-
-    // Optimized for horizontal lines
-    function makePathData(x,y,w) { return ('M'+x+' '+y+'h'+w+''); }
     function makePath(color,data) { return '<path stroke="'+color+'" d="'+data+'" />\n'; }
 
-    function colorsToPaths(colors){
+    function colorsToPaths(colors,axis){
 
-      var output = ""; 
+      var output = "";
 
-      // Loop through each color to build paths
-      each(colors,function(color,values){
-        var orig = color;
-        color = getColor.apply(null,color.split(','));
+      // Loop through each bucket (black / white) to build paths
+      each(colors,function(bucket,values){
 
-        if ( color === false ) { return; }
+        var color = bucket === 'black' ? '#000000' : '#ffffff';
+
+        // Sort so same-row (horizontal) or same-column (vertical) pixels
+        // that belong to one run are adjacent to each other in the array.
+        if ( axis === 'vertical' ) {
+          values.sort(function(a,b){ return a[0] - b[0] || a[1] - b[1]; }); // by x, then y
+        } else {
+          values.sort(function(a,b){ return a[1] - b[1] || a[0] - b[0]; }); // by y, then x
+        }
 
         var paths = [];
         var curPath;
         var w = 1;
 
-        // Loops through each color's pixels to optimize paths
+        // Loops through each bucket's pixels to optimize paths
         each(values,function(){
 
-          if ( curPath && this[1] === curPath[1] && this[0] === (curPath[0] + w) ) {
+          var continuesRun = false;
+
+          if ( curPath ) {
+            if ( axis === 'vertical' ) {
+              continuesRun = ( this[0] === curPath[0] && this[1] === (curPath[1] + w) );
+            } else {
+              continuesRun = ( this[1] === curPath[1] && this[0] === (curPath[0] + w) );
+            }
+          }
+
+          if ( continuesRun ) {
             w++;
           } else {
             if ( curPath ) {
-              paths.push(makePathData(curPath[0],curPath[1],w));
+              paths.push(makePathData(curPath[0],curPath[1],w,axis));
               w = 1;
             }
             curPath = this;
@@ -79,56 +93,62 @@ console.timeEnd = console.timeEnd || function(){};
 
         });
 
-        paths.push(makePathData(curPath[0],curPath[1],w)); // Finish last path
+        if ( curPath ) {
+          paths.push(makePathData(curPath[0],curPath[1],w,axis)); // Finish last path
+        }
         output += makePath(color,paths.join(''));
       });
 
       return output;
     }
 
-    var getColors = function(img) {
+    // Buckets every visible pixel as 'black' or 'white' based on a simple
+    // RGB average compared against `threshold` (0-255). Alpha is ignored
+    // for the black/white decision -- any pixel with alpha > 0 counts.
+    var getColors = function(img,threshold) {
       var colors = {},
           data = img.data,
           len = data.length,
           w = img.width,
-          h = img.height,
           x = 0,
           y = 0,
           i = 0,
-          color;
+          avg,
+          bucket;
 
       for (; i < len; i+= 4) {
         if ( data[i+3] > 0 ) {
-          color = data[i]+','+data[i+1]+','+data[i+2]+','+data[i+3];
-          colors[color] = colors[color] || [];
+          avg = (data[i] + data[i+1] + data[i+2]) / 3;
+          bucket = avg < threshold ? 'black' : 'white';
+          colors[bucket] = colors[bucket] || [];
           x = (i / 4) % w;
           y = Math.floor((i / 4) / w);
-          colors[color].push([x,y]);
-        }                      
+          colors[bucket].push([x,y]);
+        }
       }
 
       return colors;
     }
 
     var window = window || {};
-    window.CP = { 
+    window.CP = {
       shouldStopExecution: function(){ return false; },
       exitedLoop: function(){}
     };
 
-    var colors = getColors(img),
-        paths = colorsToPaths(colors),
+    var colors = getColors(img,threshold),
+        paths = colorsToPaths(colors,axis),
         output = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -0.5 '+img.width+' '+img.height+'" shape-rendering="crispEdges">\n<metadata>Made with Pixels to Svg https://codepen.io/shshaw/pen/XbxvNj</metadata>\n' + paths + '</svg>';
 
     // Send message back to the main script
     return output;
 
   };
-  
-  
+
+
   // File Output
   var outputDiv = document.getElementById('output');
-  
+
   function fileSize(str) {
     var bytes = encodeURI(str).split(/%..|./).length - 1;
     if ( bytes === 0 ) return 0;
@@ -137,13 +157,13 @@ console.timeEnd = console.timeEnd || function(){};
         size = bytes / Math.pow(1024, i);
     return (Math.round(size * 100) / 100) + ' ' + sizes[i];
   };
-  
+
   function downloadLink(output,fileName,linkContent) {
     return '<a href="data:Application/octet-stream,'+ encodeURIComponent(output) +'" download="'+fileName+'.svg">' + (linkContent || output ) + '</a>';
   }
-  
+
   function showOutput(output,fileName) {
-    
+
     outputDiv.innerHTML = '<figure class="output">' + downloadLink(output,fileName) + '<figcaption class="output__details"><em class="output__size">Output size: ' + fileSize(output) + '</em>' + downloadLink(output,fileName,'<span class="download">Download SVG</span>') + '<pre contentEditable="true"  class="output__raw">' + output.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre></figcaption></figure>'  + outputDiv.innerHTML;
 
     console.timeEnd('conversion');
@@ -160,29 +180,47 @@ console.timeEnd = console.timeEnd || function(){};
     canvas.width = width;
     canvas.height = height;
     ctx.drawImage(img,0,0);
-    
+
     return ctx.getImageData(0,0,width,height);
   }
-  
+
+  // Reads current values from the threshold input and axis radios/select.
+  // Falls back to sensible defaults if those controls aren't in the DOM yet,
+  // so this won't break before you've added the HTML.
+  function getThreshold() {
+    var el = document.getElementById('threshold');
+    var val = el ? parseInt(el.value, 10) : NaN;
+    return isNaN(val) ? 128 : val;
+  }
+
+  function getAxis() {
+    var el = document.querySelector('input[name="axis"]:checked') || document.getElementById('axis');
+    var val = el ? el.value : 'horizontal';
+    return val === 'vertical' ? 'vertical' : 'horizontal';
+  }
+
   var imageWorker = cw(convertImage);
   function convert(img,fileName){
 
     img = (img.type ? this : img ); // use `this` if `img` is event
     if ( !img || img === window ) { return false; }
-    
+
     console.time('conversion');
     fileName = fileName || 'pixels';
-    
+
     var imgData = imageToData(img);
+    var threshold = getThreshold();
+    var axis = getAxis();
+    var payload = { img: imgData, threshold: threshold, axis: axis };
 
     if ( !Modernizr.webworkers || !Modernizr.blobworkers ) {
       console.log('No workers or blog support. Larger images may timeout.');
-      var converted = convertImage(imgData);
+      var converted = convertImage(payload);
       showOutput(converted,fileName);
     } else {
-      imageWorker.data(imgData).then(function(converted){
+      imageWorker.data(payload).then(function(converted){
         showOutput(converted,fileName);
-      },function(e){ 
+      },function(e){
         outputDiv.innerHTML = outputRaw.innerHTML = "";
         console.error(e);
         console.timeEnd('conversion');
@@ -211,7 +249,7 @@ console.timeEnd = console.timeEnd || function(){};
       }
       reader.readAsDataURL(files[i]);
     });
-   
+
   }
 
   // File Uploader
@@ -222,25 +260,25 @@ console.timeEnd = console.timeEnd || function(){};
   var test = document.getElementById('test');
   var testImage = document.getElementById('testImage');
   test.onclick = function(){ convert(testImage,'test'); }
-  
+
   // Clear Output
   var clear = document.getElementById('clear');
   clear.onclick = function(){ output.innerHTML = ""; };
-  
+
   // Drag & Drop
   var fileDrag = document.getElementById('filedrag');
-  
+
   function FileDragReset(e){
     e.preventDefault();
     fileDrag.className = '';
   }
-  
+
   function FileDragDrop(e){
     e = e || window.event;
-		FileDragReset(e);    
+    FileDragReset(e);
     loadFiles(e);
   }
-	
+
   fileDrag.addEventListener("dragleave", FileDragReset);
   document.addEventListener("dragenter", function(){ fileDrag.className = 'dragenter'; });
   document.addEventListener('dragover',function(e){ e.preventDefault(); /* Essential! */ });
