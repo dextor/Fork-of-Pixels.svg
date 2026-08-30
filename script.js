@@ -96,6 +96,23 @@ console.timeEnd = console.timeEnd || function(){};
       return runs;
     }
 
+    // Median of the run lengths (runs[i][2]) in a runs array. Unlike the
+    // mean, this isn't skewed by one unusually long run -- a shape with
+    // one huge run and many short ones will have a low median even
+    // though its average could be high.
+    function medianRunLength(runs){
+      if ( !runs.length ) { return 0; }
+
+      var lengths = [];
+      each(runs,function(i,run){ lengths.push(run[2]); });
+      lengths.sort(function(a,b){ return a - b; });
+
+      var mid = Math.floor(lengths.length / 2);
+      return ( lengths.length % 2 !== 0 )
+        ? lengths[mid]
+        : (lengths[mid - 1] + lengths[mid]) / 2;
+    }
+
     function colorsToPaths(colors,axis){
 
       var output = "";
@@ -106,20 +123,25 @@ console.timeEnd = console.timeEnd || function(){};
         var color = bucket === 'black' ? '#000000' : '#ffffff';
         var chosenAxis, runs;
 
-        if ( axis === 'auto' ) {
-          // Decide per-bucket: whichever orientation produces fewer
-          // distinct strokes wins for THIS shape (black or white),
-          // independent of what the other bucket chooses.
+        if ( axis === 'auto' || axis === 'auto-median' ) {
+          // Decide per-bucket, independent of what the other bucket
+          // chooses. Both auto modes need both orientations computed
+          // to compare them.
           var horizRuns = buildRuns(values,'horizontal');
           var vertRuns = buildRuns(values,'vertical');
+          var vertWins;
 
-          if ( vertRuns.length < horizRuns.length ) {
-            chosenAxis = 'vertical';
-            runs = vertRuns;
+          if ( axis === 'auto' ) {
+            // Fewest total strokes (equivalent to longest MEAN run length).
+            vertWins = vertRuns.length < horizRuns.length;
           } else {
-            chosenAxis = 'horizontal';
-            runs = horizRuns;
+            // Highest MEDIAN run length -- less sensitive to one long
+            // outlier run skewing the choice.
+            vertWins = medianRunLength(vertRuns) > medianRunLength(horizRuns);
           }
+
+          chosenAxis = vertWins ? 'vertical' : 'horizontal';
+          runs = vertWins ? vertRuns : horizRuns;
         } else {
           chosenAxis = axis;
           runs = buildRuns(values,axis);
@@ -230,7 +252,8 @@ console.timeEnd = console.timeEnd || function(){};
   function getAxis() {
     var el = document.querySelector('input[name="axis"]:checked') || document.getElementById('axis');
     var val = el ? el.value : 'horizontal';
-    return ( val === 'vertical' || val === 'auto' ) ? val : 'horizontal';
+    var valid = ['vertical', 'auto', 'auto-median'];
+    return ( valid.indexOf(val) !== -1 ) ? val : 'horizontal';
   }
 
   var imageWorker = cw(convertImage);
