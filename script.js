@@ -113,9 +113,19 @@ console.timeEnd = console.timeEnd || function(){};
         : (lengths[mid - 1] + lengths[mid]) / 2;
     }
 
+    // Longest single run length (runs[i][2]) in a runs array. Driven
+    // entirely by one outlier run -- ignores how short or numerous the
+    // rest of the runs are.
+    function maxRunLength(runs){
+      var max = 0;
+      each(runs,function(i,run){ if ( run[2] > max ) { max = run[2]; } });
+      return max;
+    }
+
     function colorsToPaths(colors,axis){
 
       var output = "";
+      var autoModes = ['auto', 'auto-median', 'auto-max'];
 
       // Loop through each bucket (black / white) to build paths
       each(colors,function(bucket,values){
@@ -123,9 +133,9 @@ console.timeEnd = console.timeEnd || function(){};
         var color = bucket === 'black' ? '#000000' : '#ffffff';
         var chosenAxis, runs;
 
-        if ( axis === 'auto' || axis === 'auto-median' ) {
+        if ( autoModes.indexOf(axis) !== -1 ) {
           // Decide per-bucket, independent of what the other bucket
-          // chooses. Both auto modes need both orientations computed
+          // chooses. All auto modes need both orientations computed
           // to compare them.
           var horizRuns = buildRuns(values,'horizontal');
           var vertRuns = buildRuns(values,'vertical');
@@ -134,10 +144,14 @@ console.timeEnd = console.timeEnd || function(){};
           if ( axis === 'auto' ) {
             // Fewest total strokes (equivalent to longest MEAN run length).
             vertWins = vertRuns.length < horizRuns.length;
-          } else {
+          } else if ( axis === 'auto-median' ) {
             // Highest MEDIAN run length -- less sensitive to one long
             // outlier run skewing the choice.
             vertWins = medianRunLength(vertRuns) > medianRunLength(horizRuns);
+          } else {
+            // Longest SINGLE run wins -- whichever axis contains the one
+            // longest unbroken stroke, regardless of the rest.
+            vertWins = maxRunLength(vertRuns) > maxRunLength(horizRuns);
           }
 
           chosenAxis = vertWins ? 'vertical' : 'horizontal';
@@ -252,7 +266,7 @@ console.timeEnd = console.timeEnd || function(){};
   function getAxis() {
     var el = document.querySelector('input[name="axis"]:checked') || document.getElementById('axis');
     var val = el ? el.value : 'horizontal';
-    var valid = ['vertical', 'auto', 'auto-median'];
+    var valid = ['vertical', 'auto', 'auto-median', 'auto-max'];
     return ( valid.indexOf(val) !== -1 ) ? val : 'horizontal';
   }
 
