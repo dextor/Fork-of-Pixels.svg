@@ -25,7 +25,9 @@ console.timeEnd = console.timeEnd || function(){};
 
     var img = input.img,
         threshold = (typeof input.threshold === 'number') ? input.threshold : 128,
-        axis = input.axis === 'vertical' ? 'vertical' : 'horizontal';
+        bw = !!input.bw,
+        validAxes = ['horizontal', 'vertical', 'auto', 'auto-median', 'auto-max', 'both'],
+        axis = ( validAxes.indexOf(input.axis) !== -1 ) ? input.axis : 'horizontal';
 
     function each(obj,fn) {
       var length = obj.length,
@@ -122,15 +124,15 @@ console.timeEnd = console.timeEnd || function(){};
       return max;
     }
 
-    function colorsToPaths(colors,axis){
+    function colorsToPaths(colors,axis,bw){
 
       var output = "";
       var autoModes = ['auto', 'auto-median', 'auto-max'];
 
-      // Loop through each bucket (black / white) to build paths
+      // Loop through each bucket (black/white, or each exact color) to build paths
       each(colors,function(bucket,values){
 
-        var color = bucket === 'black' ? '#000000' : '#ffffff';
+        var color = bw ? (bucket === 'black' ? '#000000' : '#ffffff') : bucket;
 
         if ( axis === 'both' ) {
           // Emit both orientations' runs into the same path -- fully
@@ -193,10 +195,28 @@ console.timeEnd = console.timeEnd || function(){};
       return output;
     }
 
-    // Buckets every visible pixel as 'black' or 'white' based on a simple
-    // RGB average compared against `threshold` (0-255). Alpha is ignored
-    // for the black/white decision -- any pixel with alpha > 0 counts.
-    var getColors = function(img,threshold) {
+    // Original per-exact-color bucketing (used when the B&W checkbox is
+    // unchecked). Fully opaque pixels become a hex string; partially
+    // transparent pixels become an rgba() string. Fully transparent
+    // pixels are handled by the a===0 check in getColors and never
+    // reach here.
+    function componentToHex(c) {
+      var hex = c.toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    }
+    function getColor(r,g,b,a) {
+      if ( a === 0 ) { return false; }
+      if ( a === 255 ) {
+        return '#' + componentToHex(r) + componentToHex(g) + componentToHex(b);
+      }
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + (a / 255) + ')';
+    }
+
+    // Buckets every visible pixel. When `bw` is true, buckets into just
+    // 'black'/'white' via a simple RGB average vs. `threshold` (0-255),
+    // ignoring alpha for that decision. When `bw` is false, buckets by
+    // the pixel's exact color string, matching the original behavior.
+    var getColors = function(img,threshold,bw) {
       var colors = {},
           data = img.data,
           len = data.length,
@@ -204,13 +224,19 @@ console.timeEnd = console.timeEnd || function(){};
           x = 0,
           y = 0,
           i = 0,
+          r, g, b, a,
           avg,
           bucket;
 
       for (; i < len; i+= 4) {
-        if ( data[i+3] > 0 ) {
-          avg = (data[i] + data[i+1] + data[i+2]) / 3;
-          bucket = avg < threshold ? 'black' : 'white';
+        r = data[i]; g = data[i+1]; b = data[i+2]; a = data[i+3];
+        if ( a > 0 ) {
+          if ( bw ) {
+            avg = (r + g + b) / 3;
+            bucket = avg < threshold ? 'black' : 'white';
+          } else {
+            bucket = getColor(r,g,b,a);
+          }
           colors[bucket] = colors[bucket] || [];
           x = (i / 4) % w;
           y = Math.floor((i / 4) / w);
@@ -227,8 +253,8 @@ console.timeEnd = console.timeEnd || function(){};
       exitedLoop: function(){}
     };
 
-    var colors = getColors(img,threshold),
-        paths = colorsToPaths(colors,axis),
+    var colors = getColors(img,threshold,bw),
+        paths = colorsToPaths(colors,axis,bw),
         output = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -0.5 '+img.width+' '+img.height+'" shape-rendering="crispEdges">\n<metadata>Made with Pixels to Svg https://codepen.io/shshaw/pen/XbxvNj</metadata>\n' + paths + '</svg>';
 
     // Send message back to the main script
@@ -291,6 +317,13 @@ console.timeEnd = console.timeEnd || function(){};
     return ( valid.indexOf(val) !== -1 ) ? val : 'horizontal';
   }
 
+  // Defaults to false (full color) if the checkbox isn't in the DOM yet,
+  // matching the pen's original behavior.
+  function getBW() {
+    var el = document.getElementById('bw');
+    return el ? !!el.checked : false;
+  }
+
   var imageWorker = cw(convertImage);
   function convert(img,fileName){
 
@@ -303,7 +336,8 @@ console.timeEnd = console.timeEnd || function(){};
     var imgData = imageToData(img);
     var threshold = getThreshold();
     var axis = getAxis();
-    var payload = { img: imgData, threshold: threshold, axis: axis };
+    var bw = getBW();
+    var payload = { img: imgData, threshold: threshold, axis: axis, bw: bw };
 
     if ( !Modernizr.webworkers || !Modernizr.blobworkers ) {
       console.log('No workers or blog support. Larger images may timeout.');
